@@ -1,6 +1,8 @@
 {
     "files.associations": {
         "limits.h": "c",
-        "setjmp.h": "c"
+        "setjmp.h": "c",
+        "stdarg.h": "c",
+        "string.h": "c"
     }
 }

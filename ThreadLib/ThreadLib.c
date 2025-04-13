@@ -84,15 +84,16 @@
 #include <setjmp.h>
 #include <Events.h>
 #include <Memory.h>
-#include <OSUtils.h>
+#include <OSUtils.h>     // For DebugStr, NumToString, SysError
 #include <Errors.h>
 #include <Retrace.h>
-
 #include <MacTypes.h>
 #include <Quickdraw.h>
 #include <Fonts.h>
 #include <Dialogs.h>
 #include <stdlib.h>    // For exit() (if used indirectly)
+#include <string.h>    // For CtoPstr, BlockMoveData (used in DebugLog)
+#include <NumberFormatting.h> // For NumToString (used in DebugLog)
 
 
 /*----------------------------------------------------------------------------*/
@@ -312,6 +313,57 @@ typedef struct {
 /* state of thread library */
 static ThreadStateType gThread;
 
+/* === File: ThreadLib/ThreadLib.c === */
+
+// ... (Includes and other code before DebugLog) ...
+
+/*----------------------------------------------------------------------------*/
+/* Debug Logging Helper */
+/*----------------------------------------------------------------------------*/
+#if THREAD_DEBUG
+/* Helper for DebugStr logging with optional number */
+/* IMPORTANT: Avoid complex operations inside this function */
+static void DebugLog(const char *cPrefix, long value) {
+    Str255 pCombinedStr; // Use one buffer for the final Pascal string
+    Str32 pNumStr;       // Buffer for the number string
+    size_t prefixLen;
+    size_t numLen = 0;
+
+    // 1. Copy the C prefix, leaving space for the length byte
+    prefixLen = strlen(cPrefix);
+    if (prefixLen > 254) { // Ensure space for length byte and potential number
+        prefixLen = 254;
+    }
+    BlockMoveData(cPrefix, &pCombinedStr[1], prefixLen);
+    pCombinedStr[0] = (unsigned char)prefixLen; // Set initial length
+
+    // 2. Append the number if provided
+    if (value != -999) { // Use -999 as sentinel for no number
+        NumToString(value, pNumStr);
+        numLen = pNumStr[0]; // Get length of number string
+
+        // Check if there's enough space to append the number
+        if (prefixLen + numLen <= 255) {
+            BlockMoveData(&pNumStr[1], &pCombinedStr[1 + prefixLen], numLen);
+            pCombinedStr[0] += (unsigned char)numLen; // Update total length
+        }
+        // else: Number won't fit, just log the prefix
+    }
+
+    // 3. Add the newline (Mac standard \r)
+    if (pCombinedStr[0] < 255) { // Check if space for newline
+        pCombinedStr[1 + pCombinedStr[0]] = '\r';
+        pCombinedStr[0]++; // Increment length
+    }
+    // else: No space for newline, log as is
+
+    // 4. Call DebugStr with the combined Pascal string
+    DebugStr(pCombinedStr);
+}
+#else
+#define DebugLog(prefix, value) ((void)0) // Disable logging if not debugging
+#endif
+
 /*----------------------------------------------------------------------------*/
 /*	Thread Validation */
 /*----------------------------------------------------------------------------*/
@@ -344,10 +396,10 @@ static Boolean ThreadValid(ThreadPtr thread)
 #endif /* THREAD_DEBUG */
 
 /*----------------------------------------------------------------------------*/
-/*	�Stack Sniffer */
+/*	Stack Sniffer */
 /*----------------------------------------------------------------------------*/
 
-/*	�When you define THREAD_STACK_SNIFFER as 1, Thread Library installs a
+/*	When you define THREAD_STACK_SNIFFER as 1, Thread Library installs a
 	VBL task that checks for stack overflow every tick. This is similar to the
 	stack sniffer VBL task installed by the system. It is a good idea to
 	enable the stack sniffer during debugging. The stack sniffer is enabled
@@ -356,7 +408,7 @@ static Boolean ThreadValid(ThreadPtr thread)
 
 /* enable stack sniffer if we're not debugging */
 #if ! defined(THREAD_STACK_SNIFFER) && THREAD_DEBUG
-	#define THREAD_STACK_SNIFFER (1)
+	#define THREAD_STACK_SNIFFER (0)
 #endif
 
 /* The stack could easily overrun its bounds and then shrink back to
@@ -558,10 +610,10 @@ static void ThreadDequeue(ThreadQueuePtr queue, ThreadPtr thread)
 
 
 /*----------------------------------------------------------------------------*/
-/*	�Error Handling */
+/*	Error Handling */
 /*----------------------------------------------------------------------------*/
 
-/*	�ThreadError returns the last error that occurred, or noErr if the last
+/*	ThreadError returns the last error that occurred, or noErr if the last
 	routine completed successfully. */
 OSErr ThreadError(void)
 {
@@ -569,10 +621,10 @@ OSErr ThreadError(void)
 }
 
 /*----------------------------------------------------------------------------*/
-/*	�Thread Serial Numbers */
+/*	Thread Serial Numbers */
 /*----------------------------------------------------------------------------*/
 
-/*	�Every thread is assigned a unique serial number. Serial numbers are used
+/*	Every thread is assigned a unique serial number. Serial numbers are used
 	to refer to threads, rather than using a pointer, since there is always
 	the possiblity that a thread may have terminated before a thread pointer
 	is used, which would make the thread pointer invalid. The specific
@@ -628,17 +680,17 @@ static ThreadPtr ThreadFromSN(register ThreadType tsn) // Keep register keyword 
 
 
 /*----------------------------------------------------------------------------*/
-/*	�Accessing the Queue of Threads */
+/*	Accessing the Queue of Threads */
 /*----------------------------------------------------------------------------*/
 
-/*	�ThreadCount returns the number of threads in the queue. */
+/*	ThreadCount returns the number of threads in the queue. */
 short ThreadCount(void)
 {
 	gThread.error = noErr;
 	return(gThread.queue.nelem);
 }
 
-/*	�ThreadMain returns the main thread, or THREAD_NONE if there are no
+/*	ThreadMain returns the main thread, or THREAD_NONE if there are no
 	threads. */
 ThreadType ThreadMain(void)
 {
@@ -646,7 +698,7 @@ ThreadType ThreadMain(void)
 	return(ThreadSN(gThread.main));
 }
 
-/*	�ThreadActive returns the currently active thread, or THREAD_NONE if
+/*	ThreadActive returns the currently active thread, or THREAD_NONE if
 	there are no threads. */
 ThreadType ThreadActive(void)
 {
@@ -654,7 +706,7 @@ ThreadType ThreadActive(void)
 	return(ThreadSN(gThread.active));
 }
 
-/*	�ThreadFirst returns the first thread in the queue of threads, or
+/*	ThreadFirst returns the first thread in the queue of threads, or
 	THREAD_NONE if there are no threads. */
 ThreadType ThreadFirst(void)
 {
@@ -662,7 +714,7 @@ ThreadType ThreadFirst(void)
 	return(ThreadSN(gThread.queue.head));
 }
 
-/*	�ThreadNext returns the next thread in the circular queue of threads. */
+/*	ThreadNext returns the next thread in the circular queue of threads. */
 ThreadType ThreadNext(ThreadType tsn)
 {
 	ThreadPtr thread;
@@ -674,10 +726,10 @@ ThreadType ThreadNext(ThreadType tsn)
 
 
 /*----------------------------------------------------------------------------*/
-/*	�Thread Status */
+/*	Thread Status */
 /*----------------------------------------------------------------------------*/
 
-/*	�ThreadStatus returns the status of the thread as set with ThreadStatusSet.
+/*	ThreadStatus returns the status of the thread as set with ThreadStatusSet.
 	A new thread is initially assigned THREAD_STATUS_NORMAL. You can call
 	ThreadStatus periodically from within each thread (passing the result of
 	ThreadActive as the thread parameter) and should take whatever action is
@@ -695,7 +747,7 @@ ThreadStatusType ThreadStatus(ThreadType tsn)
 	return(thread ? thread->status : THREAD_STATUS_NORMAL); // Return default if thread not found
 }
 
-/*	�ThreadStatusSet sets the status code for the thread. It is the
+/*	ThreadStatusSet sets the status code for the thread. It is the
 	responsibility of each thread to call ThreadStatus to determine what
 	action should be taken. For instance, when the user quits the application,
 	the application should call ThreadStatusSet with a THREAD_STATUS_QUIT
@@ -720,10 +772,10 @@ void ThreadStatusSet(ThreadType tsn, ThreadStatusType status)
 
 
 /*----------------------------------------------------------------------------*/
-/*	�Application Defined Data */
+/*	Application Defined Data */
 /*----------------------------------------------------------------------------*/
 
-/* �ThreadData returns the data field of the thread. The application can
+/* ThreadData returns the data field of the thread. The application can
 	use the thread's data field for its own purposes. */
 void *ThreadData(ThreadType tsn)
 {
@@ -734,7 +786,7 @@ void *ThreadData(ThreadType tsn)
 	return(thread ? thread->data : NULL);
 }
 
-/* �ThreadDataSet sets the data field of the thread. The application can
+/* ThreadDataSet sets the data field of the thread. The application can
 	use the thread's data field for its own purposes. */
 void ThreadDataSet(ThreadType tsn, void *data)
 {
@@ -748,10 +800,10 @@ void ThreadDataSet(ThreadType tsn, void *data)
 
 
 /*----------------------------------------------------------------------------*/
-/*	�Information About the Stack */
+/*	Information About the Stack */
 /*----------------------------------------------------------------------------*/
 
-/*	�ThreadStackMinimum returns the recommended minimum stack size for
+/*	ThreadStackMinimum returns the recommended minimum stack size for
 	a thread. Thread Library doesn't enforce a lower limit on the
 	stack size, but it is a good idea to allow at least this many bytes
 	for a thread's stack. */
@@ -761,7 +813,7 @@ size_t ThreadStackMinimum(void)
 	return((size_t)LMGetMinStack()); // Cast to size_t
 }
 
-/*	�ThreadStackDefault returns the default stack size for a thread. This
+/*	ThreadStackDefault returns the default stack size for a thread. This
 	is the amount of stack space reserved for a thread if a zero stack size
 	is passed to ThreadBegin. */
 size_t ThreadStackDefault(void)
@@ -770,7 +822,7 @@ size_t ThreadStackDefault(void)
 	return((size_t)LMGetDefltStack()); // Cast to size_t
 }
 
-/*	�ThreadStackSpace returns the amount of stack space remaining in the
+/*	ThreadStackSpace returns the amount of stack space remaining in the
 	specified thread. There are at least the returned number of bytes
 	between the thread's stack pointer and the bottom of the thread's
 	stack, though slightly more space may be available to the application
@@ -824,10 +876,10 @@ size_t ThreadStackSpace(ThreadType tsn)
 
 
 /*----------------------------------------------------------------------------*/
-/*	�Support for Segmentation */
+/*	Support for Segmentation */
 /*----------------------------------------------------------------------------*/
 
-/*	�ThreadStackFrame returns information about the specified thread's
+/*	ThreadStackFrame returns information about the specified thread's
 	stack and stack frame. This information is needed for executing
 	a stack trace during automatic segment unloading in SegmentLib.c,
 	which is part of Winter Shell. You should never need to call this
@@ -891,10 +943,10 @@ void ThreadStackFrame(ThreadType tsn, ThreadStackFrameType *frame)
 
 
 /*----------------------------------------------------------------------------*/
-/*	�Scheduling */
+/*	Scheduling */
 /*----------------------------------------------------------------------------*/
 
-/*	�The three functions ThreadSchedule, ThreadActivate, and ThreadYield
+/*	The three functions ThreadSchedule, ThreadActivate, and ThreadYield
 	handle the scheduling and context switching of threads. These functions
 	will be executed the most often of any of the functions in this file, and
 	therefore will have the greatest impact on the efficiency of Thread
@@ -921,7 +973,7 @@ static void ThreadSleepSetPtr(ThreadPtr thread, ThreadTicksType sleep)
 }
 
 
-/* �ThreadSleepSet sets the amount of time that the specified thread will
+/* ThreadSleepSet sets the amount of time that the specified thread will
 	remain inactive.  The 'sleep' parameter specifies the maximum amount
 	of time that the thread can remain inactive. The larger the sleep value,
 	the more time is available for execution of other threads. When called
@@ -1027,7 +1079,7 @@ static ThreadPtr ThreadSchedulePtr(void)
 }
 
 
-/*	�ThreadSchedule returns the next thread to activate. Threads are maintained
+/*	ThreadSchedule returns the next thread to activate. Threads are maintained
 	in a queue and are scheduled in a round-robbin fashion. Starting with the
 	current thread, the queue of threads is searched for the next thread whose
 	wake time has arrived. The first such thread found is returned.
@@ -1062,12 +1114,12 @@ ThreadType ThreadSchedule(void)
 static void ThreadSave(void)
 {
 	require(ThreadValid(gThread.active));
+    DebugLog("\pThreadSave: Saving context for SN=", ThreadSN(gThread.active)); // ADDED
 
 	/* save exception state */
 	ExceptionSave(&gThread.active->exception);
 
-	/* Save low-memory globals. We bypass any traps (like GetApplLimit) to
-		keep context switches fast. */
+	/* Save low-memory globals. */
 	gThread.active->heapEnd = LMGetHeapEnd();
 	gThread.active->applLimit = LMGetApplLimit();
 	gThread.active->hiHeapMark = LMGetHiHeapMark();
@@ -1075,6 +1127,8 @@ static void ThreadSave(void)
 	/* call the application's suspend function */
 	if (gThread.active->suspend)
 		gThread.active->suspend(gThread.active->data);
+
+    DebugLog("\pThreadSave: Done saving context for SN=", ThreadSN(gThread.active)); // ADDED
 }
 
 /*	ThreadRestore restores the context of the active thread. It is called
@@ -1086,103 +1140,81 @@ static void ThreadRestore(void)
 	register ThreadPtr thread;		 /* for faster access to thread */
 
 	require(ThreadValid(gThread.active));
+    DebugLog("\pThreadRestore: Restoring context for SN=", ThreadSN(gThread.active)); // ADDED
 
-	/* put things into registers */
 	thread = gThread.active;
 	queue = &gThread.queue;
 
-	/* activate the stack sniffer VBL for the new active thread */
 	StackSnifferResume();
-
-	/* Restore the exception state for the thread. The first
-		time this is executed it clears and resets the exception
-		state, since the exception field of the thread structure
-		is initially filled with nulls. The exception state must
-		be cleared for a new thread to prevent exceptions from
-		propagating out of the thread's entry point. */
 	ExceptionRestore(&gThread.active->exception);
 
-	/* Set the low-memory globals for the thread. We bypass any
-		traps or glue (like SetApplLimit) to keep the OS from
-		preventing us from changing these globals and to keep
-		context switches fast. */
 	LMSetHeapEnd(thread->heapEnd);
 	LMSetApplLimit(thread->applLimit);
 	LMSetHiHeapMark(thread->hiHeapMark);
 
 	/* dispose of the memory allocated for the previous thread (see ThreadEnd) */
 	if (gThread.dispose) {
-		if (gThread.dispose->stack)
+        DebugLog("\pThreadRestore: Disposing delayed thread SN=", ThreadSN(gThread.dispose)); // ADDED
+		if (gThread.dispose->stack) {
+            DebugLog("\pThreadRestore:   Disposing stack for SN=", ThreadSN(gThread.dispose)); // ADDED
 			DisposePtr(gThread.dispose->stack);
+        }
+        DebugLog("\pThreadRestore:   Disposing struct for SN=", ThreadSN(gThread.dispose)); // ADDED
 		DisposePtr((Ptr) gThread.dispose);
 		gThread.dispose = NULL;
+        DebugLog("\pThreadRestore: Delayed disposal complete", -999); // ADDED (use sentinel)
 	}
 
-	/* Move the thread to the tail of the queue so that it is rescheduled
-		to run after all other threads (though scheduling also depends on
-		wake times and priority). Functionally, the move-to-tail is always
-		equivalent to a dequeue followed by an enqueue, but it's optimized
-		for the most common case where the thread is already at the front
-		of the queue. Since the queue is circular, we can just advance the
-		head and tail pointers to achieve the same result. We do the
-		optimization in-line since the function call overhead could be
-		significant over many context switches. */
-	if (queue->nelem > 1) { // Only move if more than one thread
+	/* Move the thread to the tail of the queue */
+	if (queue->nelem > 1) {
 		if (thread == queue->head) {
 			queue->head = thread->next;
 			queue->tail = thread;
 		}
-		// No need to move if it's already the tail
-		// else if (thread != queue->tail) {
-		//	ThreadDequeue(queue, thread); // This is inefficient, avoid if possible
-		//	ThreadEnqueue(queue, thread);
-		//}
 	}
-
 
 	/* call the application's resume function */
 	if (thread->resume)
 		thread->resume(thread->data);
+
+    DebugLog("\pThreadRestore: Done restoring context for SN=", ThreadSN(gThread.active)); // ADDED
 }
 
 
-/* ThreadActivatePtr is identical to ThreadActivate, except it takes a pointer
-	to a thread instead of a thread serial number. This makes context switches
-	triggered via ThreadYield more efficient, since we already have direct
-	access to the relavent thread pointers and so don't need to waste time
-	converting to and from thread serial numbers. */
+/* ThreadActivatePtr activates the specified thread pointer. */
 static void ThreadActivatePtr(ThreadPtr thread)
 {
 	require(ThreadValid(gThread.active));
 	require(ThreadValid(thread));
+
+    DebugLog("\pThreadActivatePtr: Request switch From SN=", ThreadSN(gThread.active)); // ADDED
+    DebugLog("\p                      To   SN=", ThreadSN(thread)); // ADDED
+
 	if (thread != gThread.active) {
+        DebugLog("\pThreadActivatePtr: Performing switch...", -999); // ADDED
 		if (setjmp(gThread.active->jmpenv) == THREAD_SAVE) {
+			/* the thread is being deactivated */
+			ThreadSave(); // Log inside ThreadSave
 
-			/* the thread is being deactivated, so do whatever is needed to
-				save the active thread's context */
-			ThreadSave();
-
-			/* Jump to the specified thread. This suspends the current thread
-				and returns at the setjmp statement above (unless this is the
-				first time the thread is being executed, in which case it
-				returns at the setjmp statement in ThreadBegin). The contents
-				of the stack will be correct as soon as the longjmp has
-				completed, but ThreadRestore must be called before the
-				thread can resume. */
+			/* Jump to the specified thread. */
 			gThread.active = thread;
+            DebugLog("\pThreadActivatePtr: --> longjmp to SN=", ThreadSN(thread)); // ADDED
 			longjmp(thread->jmpenv, THREAD_RUN);
-			// check(false); /* doesn't return */ // Removed assertion
+			// check(false); /* doesn't return */
 		}
 		else {
-			/* the thread is being activated, so restore the thread's context */
-			ThreadRestore();
+			/* the thread is being activated */
+            DebugLog("\pThreadActivatePtr: <-- Returned from longjmp", -999); // ADDED
+			ThreadRestore(); // Log inside ThreadRestore
 		}
-	}
-	/* ensure(gThread.active == thread); */ /* can't evaluate this postcondition */
+	} else {
+        DebugLog("\pThreadActivatePtr: No switch needed (target is active)", -999); // ADDED
+    }
+	/* ensure(gThread.active == thread); */
 }
 
 
-/*	�ThreadActivate activates the specified thread. The context switch is
+/*	ThreadActivate activates the specified thread. The context switch is
 	accomplished by saving the CPU context with setjmp and then calling
 	longjmp, which jumps to the environment saved with setjmp when the thread
 	being activated was last suspended. We don't have to do any assembly
@@ -1203,7 +1235,7 @@ void ThreadActivate(ThreadType tsn)
 	/* ensure(! thread || ThreadActive() == tsn); */ /* can't evaluate this postcondition */
 }
 
-/*	�ThreadYield activates the next scheduled thread as determined by
+/*	ThreadYield activates the next scheduled thread as determined by
 	ThreadSchedule. The 'sleep' parameter has the same meaning as the
 	parameter to ThreadSleepSet. */
 void ThreadYield(ThreadTicksType sleep)
@@ -1219,7 +1251,7 @@ void ThreadYield(ThreadTicksType sleep)
 	ThreadActivatePtr(ThreadSchedulePtr());
 }
 
-/*	�ThreadYieldInterval returns the maximum time till the next call to
+/*	ThreadYieldInterval returns the maximum time till the next call to
 	ThreadYield. The interval is computed by subtracting the current time
 	from each thread's wake time, giving the amount of time that each
 	thread can remain inactive. The minimum of these times gives the
@@ -1273,82 +1305,74 @@ ThreadTicksType ThreadYieldInterval(void)
 
 
 /*----------------------------------------------------------------------------*/
-/*	�Thread Creation and Destruction */
+/*	Thread Creation and Destruction */
 /*----------------------------------------------------------------------------*/
 
-/* ThreadEndPtr is identical in function to ThreadEnd (see below), but it
-	takes a pointer to a thread rather than a thread serial number. */
+/* ThreadEndPtr removes the thread pointer from the queue. */
 static void ThreadEndPtr(ThreadPtr thread)
 {
 	ThreadPtr newthread; /* thread to activate if disposing of the active thread */
 
 	require(ThreadValid(thread));
+    DebugLog("\pThreadEndPtr: Ending thread SN=", ThreadSN(thread)); // ADDED
 
 	newthread = NULL;
 	if (thread == gThread.main) {
-
-		/* We're disposing of the main thread, so this is a good time
-			to do any final cleanup of the thread library. */
-
-		/* clear globals */
+        DebugLog("\pThreadEndPtr:   Ending MAIN thread", -999); // ADDED
 		check(gThread.active == thread);
 		check(gThread.queue.nelem == 1);
-
-		/* remove our stack sniffer VBL task */
 		StackSnifferRemove();
-
-		/* Dequeue before setting globals to NULL */
+        DebugLog("\pThreadEndPtr:   Dequeuing main thread", -999); // ADDED
 		ThreadDequeue(&gThread.queue, thread);
 		gThread.main = gThread.active = NULL;
-
+        DebugLog("\pThreadEndPtr:   Main thread dequeued", -999); // ADDED
 
 	}
 	else if (thread == gThread.active) {
-
-		/* We're disposing of the active thread, so activate the next
-			scheduled thread, or the main thread if the next scheduled
-			thread is the active thread. */
+        DebugLog("\pThreadEndPtr:   Ending ACTIVE thread", -999); // ADDED
 		newthread = ThreadSchedulePtr();
-		if (newthread == gThread.active) // If scheduler picks self, pick main
+        DebugLog("\pThreadEndPtr:   Next scheduled thread is SN=", ThreadSN(newthread)); // ADDED
+		if (newthread == gThread.active) {
 			newthread = gThread.main;
+            DebugLog("\pThreadEndPtr:   Scheduler picked self, switching to main SN=", ThreadSN(newthread)); // ADDED
+        }
 
-		/* Dequeue the thread *before* switching context */
+        DebugLog("\pThreadEndPtr:   Dequeuing active thread SN=", ThreadSN(thread)); // ADDED
 		ThreadDequeue(&gThread.queue, thread);
+        DebugLog("\pThreadEndPtr:   Active thread dequeued", -999); // ADDED
 
 	} else {
-		/* Disposing of an inactive thread */
+        DebugLog("\pThreadEndPtr:   Ending INACTIVE thread SN=", ThreadSN(thread)); // ADDED
+        DebugLog("\pThreadEndPtr:   Dequeuing inactive thread SN=", ThreadSN(thread)); // ADDED
 		ThreadDequeue(&gThread.queue, thread);
+        DebugLog("\pThreadEndPtr:   Inactive thread dequeued", -999); // ADDED
 	}
 
 
-	// check(! newthread || newthread != gThread.active); // Removed assertion
-
 	if (thread == gThread.active && newthread) {
-
-		/* We're disposing of the active thread, but we can't dispose of
-			the thread's stack since we're still using that stack. So
-			we delay disposal of the thread until the next thread is
-			activated; the thread will be disposed of in ThreadRestore,
-			which is executed when the next scheduled thread is activated. */
+        DebugLog("\pThreadEndPtr:   Delaying disposal of active SN=", ThreadSN(thread)); // ADDED
 		check(! gThread.dispose);
 		gThread.dispose = thread;
 
-		/* activate the next thread (we don't call ThreadActivate since
-			there's no need to save the now-defunct thread's state) */
 		gThread.active = newthread;
+        DebugLog("\pThreadEndPtr:   --> longjmp from ended thread to SN=", ThreadSN(newthread)); // ADDED
 		longjmp(newthread->jmpenv, THREAD_RUN);
-		// check(false); /* doesn't return */ // Removed assertion
+		// check(false); /* never returns */
 	}
 	else {
-		/* dispose of the memory allocated for the thread (inactive or main) */
-		if (thread->stack) // Only dispose stack if it exists (not for main)
+        DebugLog("\pThreadEndPtr:   Immediately disposing memory for SN=", ThreadSN(thread)); // ADDED
+		if (thread->stack) {
+            DebugLog("\pThreadEndPtr:     Disposing stack", -999); // ADDED
 			DisposePtr(thread->stack);
+        }
+        DebugLog("\pThreadEndPtr:     Disposing struct", -999); // ADDED
 		DisposePtr((Ptr) thread);
+        DebugLog("\pThreadEndPtr:   Immediate disposal complete", -999); // ADDED
 	}
 }
 
 
-/*	�ThreadEnd removes the thread from the queue and disposes of the memory
+/*	ThreadEnd removes the thread from the queue and disposes of the memory
 	allocated for the thread. If the thread is the active thread then the
 	next scheduled thread is activated. All threads (other than the main
 	thread) must be disposed of before the main thread can be disposed of. */
@@ -1356,14 +1380,22 @@ void ThreadEnd(ThreadType tsn)
 {
 	ThreadPtr thread;
 
-	thread = ThreadFromSN(tsn);
-	if (thread)
+    // Add DebugLog before potentially failing call
+    DebugLog("\pThreadEnd: Request to end SN=", tsn); // ADDED
+
+	thread = ThreadFromSN(tsn); // Sets gThread.error if not found
+	if (thread) {
+        DebugLog("\pThreadEnd: Found thread, calling ThreadEndPtr for SN=", tsn); // ADDED
 		ThreadEndPtr(thread);
-	// Error code set by ThreadFromSN if tsn invalid
-	/* ensure(! ThreadValid(ThreadFromSN(tsn))); */ /* can't execute this */
+        DebugLog("\pThreadEnd: Returned from ThreadEndPtr for SN=", tsn); // ADDED
+    } else {
+        DebugLog("\pThreadEnd: Thread SN not found=", tsn); // ADDED
+        // Error code already set by ThreadFromSN
+    }
+	/* ensure(! ThreadValid(ThreadFromSN(tsn))); */
 }
 
-/*	�ThreadBeginMain creates the main application thread and returns the main
+/*	ThreadBeginMain creates the main application thread and returns the main
 	thread's serial number. You must call this function before creating any
 	other threads with ThreadBegin. You must also call MaxApplZone before
 	calling this function. The 'resume', 'suspend', and 'data' parameters
@@ -1450,7 +1482,7 @@ ThreadType ThreadBeginMain(ThreadProcType suspend, ThreadProcType resume,
 }
 
 
-/*	�ThreadBegin creates a new thread and returns the thread's serial number.
+/*	ThreadBegin creates a new thread and returns the thread's serial number.
 	You must create the main thread with ThreadBeginMain before you can call
 	ThreadBegin. The 'entry' parameter is a pointer to a function that is
 	called to start executing the thread. The 'suspend' parameter is a pointer
