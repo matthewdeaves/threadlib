@@ -3,6 +3,7 @@
         "limits.h": "c",
         "setjmp.h": "c",
         "stdarg.h": "c",
-        "string.h": "c"
+        "string.h": "c",
+        "threadlib.h": "c"
     }
 }
