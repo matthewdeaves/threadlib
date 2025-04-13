@@ -53,10 +53,17 @@
 #include <Quickdraw.h>
 #include <Windows.h>
 #include <Events.h>
+#include <Dialogs.h>
+#include <TextEdit.h>
+#include <Fonts.h>
+#include <Menus.h>
+#include <ToolUtils.h>
+#include <OSUtils.h>
+#include <Memory.h>
 #include <Gestalt.h>
-#include <Threads.h>
+#include <Threads.h>     // Apple's Thread Manager header
 #include <Traps.h>
-#include "ThreadLib.h"
+#include "ThreadLib.h"   // Your custom library header
 
 /*----------------------------------------------------------------------------*/
 /* global definitions and declarations */
@@ -290,7 +297,7 @@ static void SetDText(DialogPtr dlg, short item, const Str255 str)
 	Handle hitem;
 	Rect box;
 
-	GetDItem(dlg, item, &type, &hitem, &box);
+	GetDialogItem(dlg, item, &type, &hitem, &box);
 	SetIText(hitem, str);
 }
 
