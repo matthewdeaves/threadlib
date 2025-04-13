@@ -6,7 +6,7 @@
 
 # Assume Retro68 tools are in the PATH
 CC_MAC = m68k-apple-macos-gcc
-CXX_MAC = m68k-apple-macos-g++ # Use C++ driver for linking
+CXX_MAC = m68k-apple-macos-g++ # Variable still defined, but not used for linking below
 REZ = Rez
 
 # --- Dynamically Find RIncludes and CIncludes ---
@@ -52,6 +52,7 @@ endif
 CFLAGS_MAC = -g -w -ffunction-sections -D__MACOS__ -IThreadLib -I"$(CINCLUDES)" -I"$(UNIVERSAL_CINCLUDES)"
 
 # Linker flags (passed via the compiler driver using -Wl,)
+# Reverted to simple flags, assuming SetIText issue resolved in code
 LDFLAGS_MAC = -Wl,-gc-sections -Wl,--mac-strip-macsbug
 
 # Rez flags
@@ -85,6 +86,7 @@ TEST_C_FILES = $(wildcard $(TEST_DIR)/*.c)
 TEST_R_FILE = $(TEST_DIR)/ThreadsTest.r
 
 TIMED_C_FILES = $(wildcard $(TIMED_DIR)/*.c)
+# ThreadsTimed does not have its own .r file, uses Retro68APPL.r
 
 # --- Object Files ---
 # Place library objects in their own subdirectory
@@ -142,7 +144,7 @@ $(TEST_FINAL_TARGETS): $(TEST_INTERMEDIATE) $(TEST_R_FILE) Makefile | $(BUILD_DI
 # Depends on its own objects AND the library objects
 $(TEST_INTERMEDIATE): $(TEST_OBJS) $(LIB_OBJS) Makefile | $(OBJ_DIR_TEST)
 	@echo "--- Link Stage (ThreadsTest) ---"
-	$(CXX_MAC) $(TEST_OBJS) $(LIB_OBJS) -o $@ $(LDFLAGS_MAC)
+	$(CC_MAC) $(TEST_OBJS) $(LIB_OBJS) -o $@ $(LDFLAGS_MAC) # Using CC_MAC
 
 # Rule to compile ThreadsTest C source files
 $(OBJ_DIR_TEST)/%.o: $(TEST_DIR)/%.c $(LIB_H_FILES) Makefile | $(OBJ_DIR_TEST)
@@ -167,7 +169,7 @@ $(TIMED_FINAL_TARGETS): $(TIMED_INTERMEDIATE) Makefile | $(BUILD_DIR_TIMED)
 # Depends on its own objects AND the library objects
 $(TIMED_INTERMEDIATE): $(TIMED_OBJS) $(LIB_OBJS) Makefile | $(OBJ_DIR_TIMED)
 	@echo "--- Link Stage (ThreadsTimed) ---"
-	$(CXX_MAC) $(TIMED_OBJS) $(LIB_OBJS) -o $@ $(LDFLAGS_MAC)
+	$(CC_MAC) $(TIMED_OBJS) $(LIB_OBJS) -o $@ $(LDFLAGS_MAC) # Using CC_MAC
 
 # Rule to compile ThreadsTimed C source files
 $(OBJ_DIR_TIMED)/%.o: $(TIMED_DIR)/%.c $(LIB_H_FILES) Makefile | $(OBJ_DIR_TIMED)
