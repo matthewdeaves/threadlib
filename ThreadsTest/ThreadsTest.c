@@ -298,7 +298,7 @@ static void SetDText(DialogPtr dlg, short item, const Str255 str)
 	Rect box;
 
 	GetDialogItem(dlg, item, &type, &hitem, &box);
-	SetIText(hitem, str);
+	SetDialogItemText(hitem, str);
 }
 
 /* set the text of the dialog item to the number */
