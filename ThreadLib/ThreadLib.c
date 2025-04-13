@@ -1,4 +1,3 @@
-/* === File: ThreadLib/ThreadLib.c === */
 /* See the file Distribution for distribution terms.
 	(c) Copyright 1994 Ari Halberstadt */
 
@@ -78,84 +77,77 @@
 /* include statements */
 /*----------------------------------------------------------------------------*/
 
-#include "LowMem.h"      // Include local LowMem first!
-#include "ThreadLib.h"
-
 #include <setjmp.h>
 #include <Events.h>
 #include <Memory.h>
 #include <OSUtils.h>
-#include <Errors.h>
-#include <Retrace.h>
-
-#include <MacTypes.h>
-#include <Quickdraw.h>
-#include <Fonts.h>
-#include <Dialogs.h>
-#include <stdlib.h>    // For exit() (if used indirectly)
-
+#include "ThreadLib.h"
 
 /*----------------------------------------------------------------------------*/
 /* compiler-specific code */
 /*----------------------------------------------------------------------------*/
 
-// #if ! defined(THINK_C) || THINK_C != 5
-//	/* The register ordering within the jmp_buf type is compiler dependent.
-//		It should be straightforward to modify this for MPW, and less so
-//		for a native PowerPC version (though perhaps still possible). For
-//		MPW and later versions of THINK C you should check the "setjmp.h" header
-//		file for the definition of jmp_buf and also check the instructions used to
-//		save and restore the registers (in THINK C they're inline definitions).
-//		We only really care about accessing and modifying registers a6 and a7
-//		in the jump buffer (though of course other registers need to be saved
-//		and restored).
-//
-//		For compilers other than THINK C, you should be careful when turning
-//		on the optimizer. For instance, I found that the "defer and combine
-//		stack adjusts" option was incompatible with the thread library. I
-//		recommend first getting the thread library to work with all
-//		optimizations disabled. Once you know that it runs under the new
-//		compiler, you can enable the optimizations. If it then crashes,
-//		you'll know that one or more of the optimizations performed by
-//		the compiler are incompatible with the thread library and should
-//		therefore be disabled.
-//
-//		If you adapt the thread library for any other compiler, such as
-//		THINK C 6.0, MPW, or MetroWorks, please let me know what changes
-//		were necessary so that I may incorporate them into the next
-//		release. */
-//	#error "only tested with THINK C 5.0.4"
-// #endif
+//#if ! defined(THINK_C) || THINK_C != 5
+	/* The register ordering within the jmp_buf type is compiler dependent.
+		It should be straightforward to modify this for MPW, and less so
+		for a native PowerPC version (though perhaps still possible). For
+		MPW and later versions of THINK C you should check the "setjmp.h" header
+		file for the definition of jmp_buf and also check the instructions used to
+		save and restore the registers (in THINK C they're inline definitions).
+		We only really care about accessing and modifying registers a6 and a7
+		in the jump buffer (though of course other registers need to be saved
+		and restored).
+		
+		For compilers other than THINK C, you should be careful when turning
+		on the optimizer. For instance, I found that the "defer and combine
+		stack adjusts" option was incompatible with the thread library. I
+		recommend first getting the thread library to work with all
+		optimizations disabled. Once you know that it runs under the new
+		compiler, you can enable the optimizations. If it then crashes,
+		you'll know that one or more of the optimizations performed by
+		the compiler are incompatible with the thread library and should
+		therefore be disabled.
+		
+		If you adapt the thread library for any other compiler, such as
+		THINK C 6.0, MPW, or MetroWorks, please let me know what changes
+		were necessary so that I may incorporate them into the next
+		release. */
+	//#error "only tested with THINK C 5.0.4"
+//#endif
 
 // #if defined(THINK_C) && __option(profile)
-//	/* The THINK C profiler assumes a single execution stack and won't
-//		work correctly if threads are used. Other profilers may or may
-//		not work correctly; use them at your own risk. */
-//	#error "won't work with THINK C profiler"
+// 	/* The THINK C profiler assumes a single execution stack and won't
+// 		work correctly if threads are used. Other profilers may or may
+// 		not work correctly; use them at your own risk. */
+// 	#error "won't work with THINK C profiler"
 // #endif
 
-// #if defined(THINK_C)
-//	/* The thread library will not work correctly (the heap will become
-//		corrupted) when the THINK C "defer and combine stack adjusts"
-//		optimization option is enabled. We therefore disable the option
-//		for this file. All other THINK C optimizations work fine with the
-//		thread library. */
-//	#pragma options(! defer_adjust)
-// #endif
+#if defined(THINK_C)
+	/* The thread library will not work correctly (the heap will become
+		corrupted) when the THINK C "defer and combine stack adjusts"
+		optimization option is enabled. We therefore disable the option
+		for this file. All other THINK C optimizations work fine with the
+		thread library. */
+	#pragma options(! defer_adjust)
+#endif
 
-/* Define register offsets for jmp_buf based on Retro68/GCC's setjmp.h */
-/* NOTE: This assumes a standard 68k setjmp layout. Verify if issues arise. */
-/*       Retro68's setjmp likely saves d2-d7, a2-a7, pc. */
-/*       We need a6 and a7. Assuming a standard layout: */
-/*       d2-d7 (6 longs), a2-a5 (4 longs), a6 (1 long), a7 (1 long), pc (1 long) */
-/*       So a6 is index 10, a7 is index 11 (0-based). */
-enum {
-	// d2, d3, d4, d5, d6, d7,  // Indices 0-5
-	// a2, a3, a4, a5,          // Indices 6-9
-	a6 = 10,                   // Index 10
-	a7 = 11                    // Index 11
-};
-
+#if defined(THINK_C)
+	/* register ordering within jmp_buf (only for THINK C 5.0.4) */
+	enum {
+		d3, d4, d5, d6, d7,
+		a1, a2, a3, a4, a6, a7
+		/* may be followed by extra floating point registers */
+	};
+#else
+    /* jmp_buf layout for Retro68 GCC m68k (newlib) */
+    /* Based on analysis of gcc/newlib/libc/machine/m68k/setjmp.S */
+    /* The jmp_buf is int[34] (136 bytes). */
+    /* Offsets derived from moveml/movel instructions in setjmp: */
+    /* a7 (sp) is saved at byte offset 8. */
+    /* a6 is the 11th register in moveml d2-d7/a2-a6, saved at byte offset 60. */
+    #define JMP_BUF_A6_INDEX 15 /* Index for a6 = 60 / sizeof(int) */
+    #define JMP_BUF_A7_INDEX 2  /* Index for a7 = 8 / sizeof(int)  */
+#endif
 
 /*----------------------------------------------------------------------------*/
 /* debug declarations */
@@ -180,7 +172,7 @@ enum {
 	the trap dispatcher, resulted in a signficant increase in speed. These were
 	the results of running my ThreadTimed application (each test ran for 60
 	seconds):
-
+	
 		Ticks:		Thread Library: count = 148448
 		TickCount:	Thread Library: count = 99360
 		Ticks:		Thread Manager: count = 52992
@@ -191,24 +183,41 @@ enum {
 	Using the Ticks low-memory global was about 50% faster (148448 versus 99360)
 	than using the TickCount trap. */
 
-/* Use the accessor functions defined in the local LowMem.h consistently. */
-/* The conditional compilation based on __LOMEM__ is removed. */
-
-/* Example usage (no changes needed here as the code below already uses the functions):
-   LMGetTicks()
-   LMGetEventQueue()
-   LMGetHeapEnd()
-   LMGetHiHeapMark()
-   LMGetApplLimit()
-   LMGetCurStackBase()
-   LMGetMinStack()
-   LMGetDefltStack()
-   LMSetStkLowPt(p)
-   LMSetHeapEnd(p)
-   LMSetApplLimit(p)
-   LMSetHiHeapMark(p)
-*/
-
+/* THINK C has a header called "LoMem.h" that uses a special syntax
+	to define low-memory globals. Usually, "LoMem.h" is included in the
+	default precompiled header "MacHeaders". Since both "LoMem.h" and
+	"SysEqu.h" declare symbols with identical names, only one of the
+	files may be used. */
+#ifndef __LOMEM__
+	#include <sysequ.h>
+	#define LMGetTicks()				(*(long *) Ticks)
+	#define LMGetEventQueue()		((QHdrPtr) EventQueue)
+	#define LMGetHeapEnd()			(*(Ptr *) HeapEnd)
+	#define LMGetHiHeapMark()		(*(Ptr *) HiHeapMark)
+	#define LMGetApplLimit()		(*(Ptr *) ApplLimit)
+	#define LMGetCurStackBase()	(*(Ptr *) CurStackBase)
+	#define LMGetMinStack()			(*(long *) MinStack)
+	#define LMGetDefltStack()		(*(long *) DefltStack)
+	#define LMSetStkLowPt(p)		((void) (*(Ptr *) StkLowPt = (p)))
+	#define LMSetHeapEnd(p)			((void) (*(Ptr *) HeapEnd = (p)))
+	#define LMSetApplLimit(p)		((void) (*(Ptr *) ApplLimit = (p)))
+	#define LMSetHiHeapMark(p)		((void) (*(Ptr *) HiHeapMark = (p)))
+#else /* __LOMEM__ */
+	Ptr HiHeapMark : 0x0BAE;
+	Ptr StkLowPt : 0x0110;
+	#define LMGetTicks()				(Ticks)
+	#define LMGetEventQueue()		(&EventQueue)
+	#define LMGetHeapEnd()			(HeapEnd)
+	#define LMGetHiHeapMark()		(HiHeapMark)
+	#define LMGetApplLimit()		(ApplLimit)
+	#define LMGetCurStackBase()	(CurStackBase)
+	#define LMGetMinStack()			(MinStack)
+	#define LMGetDefltStack()		(DefltStack)
+	#define LMSetStkLowPt(p)		((void) (StkLowPt = (p)))
+	#define LMSetHeapEnd(p)			((void) (HeapEnd = (p)))
+	#define LMSetApplLimit(p)		((void) (ApplLimit = (p)))
+	#define LMSetHiHeapMark(p)		((void) (HiHeapMark = (p)))
+#endif /* __LOMEM__ */
 
 /*----------------------------------------------------------------------------*/
 /* Winter Shell is an application framework I've written. This section
@@ -217,51 +226,51 @@ enum {
 	used in other applications. */
 /*----------------------------------------------------------------------------*/
 
-#if WINTER_SHELL // Keep this conditional for potential future use
+#if WINTER_SHELL
 
 	#include "ExceptionLib.h"
 	#include "MemoryLib.h"
 
 	typedef ExceptionType ThreadExceptionType;
-
+	
 	static void FailThreadError(void)
 	{
 		FailOSErr(ThreadError());
 	}
-
+	
 #else /* WINTER_SHELL */
 
 	/* exception handling */
-
+	
 	typedef void *ThreadExceptionType;
 	#define FailThreadError()			((void) 0)
 	#define ExceptionSave(exc)			((void) 0)
 	#define ExceptionRestore(exc)		((void) 0)
 
 	/* memory allocation */
-
-	#define MemAvailable(n)				(true) // Simplified for now
-
+	
+	#define MemAvailable(n)				(true)
+	
 	/* assertions */
-
+	
 	#define require(x)					threadassert(x)
 	#define check(x)						threadassert(x)
 	#define ensure(x)						threadassert(x)
-
+	
 	#if THREAD_DEBUG
-
+	
 		#define threadassert(x)	((void) ((x) || assertfailed()))
-
+	
 		static int assertfailed(void)
 		{
 			DebugStr((StringPtr) "\pAn assertion failed in Thread Library.");
 			return(0);
 		}
-
+	
 	#else /* THREAD_DEBUG */
-
+	
 		#define threadassert(x) ((void) 0)
-
+	
 	#endif /* THREAD_DEBUG */
 
 #endif /* WINTER_SHELL */
@@ -346,7 +355,7 @@ static Boolean ThreadValid(ThreadPtr thread)
 /*----------------------------------------------------------------------------*/
 /*	�Stack Sniffer */
 /*----------------------------------------------------------------------------*/
-
+	
 /*	�When you define THREAD_STACK_SNIFFER as 1, Thread Library installs a
 	VBL task that checks for stack overflow every tick. This is similar to the
 	stack sniffer VBL task installed by the system. It is a good idea to
@@ -355,17 +364,20 @@ static Boolean ThreadValid(ThreadPtr thread)
 	is not zero. */
 
 /* enable stack sniffer if we're not debugging */
-#if ! defined(THREAD_STACK_SNIFFER) && THREAD_DEBUG
-	#define THREAD_STACK_SNIFFER (1)
-#endif
+// #if ! defined(THREAD_STACK_SNIFFER) && THREAD_DEBUG
+	#define THREAD_STACK_SNIFFER (0)
+// #endif
 
 /* The stack could easily overrun its bounds and then shrink back to
 	within its bounds between VBL interrupts, so a "magic" long-word
 	is written at the bottom of the stack. If the long-word is modified,
 	then the stack is assumed to have overrun its bounds. */
-#define STACK_SNIFFER_SENTINEL		(0x534E4946) // 'SNIF'
+#define STACK_SNIFFER_SENTINEL		('SNIF')
 
 #if THREAD_STACK_SNIFFER
+
+#include <Errors.h>
+#include <Retrace.h>
 
 /* By using extra fields following the VBL task record we can have access
 	to additional information and global variables needed by the VBL task. */
@@ -382,27 +394,25 @@ static StackSnifferVBLType gStackSniffer;	/* stack sniffer VBL task record */
 
 /* StackSnifferVBL is a VBL task that checks that the stack pointer hasn't
 	gone past the end of the current thread's stack. */
-static pascal void StackSnifferVBL(void) // Removed register usage for portability
+static pascal void StackSnifferVBL(void)
 {
-	StackSnifferVBLType *task = &gStackSniffer; // Access global directly
-	Ptr rsp;
-
-	// Get current stack pointer (SP/A7)
-	// This assembly is specific to 68k GCC syntax
-	asm volatile ("move.l %%a7, %0" : "=a" (rsp));
-
+	register StackSnifferVBLType *task;
+	register Ptr rsp;
+	
+	asm {
+		move.l a0, task
+		move.l sp, rsp
+	}
 	if (task->thread == *task->active) {
 		if (rsp < task->stack_bottom ||
 			 (task->thread != *task->main &&
 			  *(long *) task->stack_bottom != STACK_SNIFFER_SENTINEL))
 		{
-			SysError(28); // Use standard error code
+			SysError(28);
 		}
 	}
-	task->vbl.vblCount = 1; // Prime for next VBL
-	// Need to return; VBL tasks don't use RTS automatically in C
+	task->vbl.vblCount = 1;
 }
-
 
 /* StackSnifferInstall installs our own VBL task to check for stack underflow
 	or overflow in a thread. This is needed since the system's stack sniffer
@@ -413,19 +423,14 @@ static void StackSnifferInstall(void)
 	require(ThreadValid(gThread.active));
 	if (! gStackSniffer.installed) {
 		gStackSniffer.vbl.qType = vType;
-		gStackSniffer.vbl.vblAddr = (VBLUPP) StackSnifferVBL; // Cast needed
+		gStackSniffer.vbl.vblAddr = StackSnifferVBL;
 		gStackSniffer.vbl.vblCount = 1;
-		gStackSniffer.vbl.vblPhase = 0; // Initialize phase
 		gStackSniffer.stack_bottom = 0;
 		gStackSniffer.thread = NULL;
 		gStackSniffer.main = &gThread.main;
 		gStackSniffer.active = &gThread.active;
-		OSErr err = VInstall((QElemPtr) &gStackSniffer);
-		if (err == noErr) {
-			gStackSniffer.installed = true;
-		} else {
-			// Handle VInstall error if necessary
-		}
+		(void) VInstall((QElemPtr) &gStackSniffer);
+		gStackSniffer.installed = true;
 	}
 }
 
@@ -445,14 +450,12 @@ static void StackSnifferRemove(void)
 	stack sniffer. */
 static void StackSnifferResume(void)
 {
-	if (!gStackSniffer.installed) return; // Don't do anything if not installed
-
 	/* get bottom of active thread's stack */
 	if (gThread.active == gThread.main)
-		gStackSniffer.stack_bottom = LMGetApplLimit();
+		gStackSniffer.stack_bottom = GetApplLimit();
 	else
 		gStackSniffer.stack_bottom = gThread.active->stack;
-
+	
 	/* the following statement reenables the stack sniffer */
 	gStackSniffer.thread = gThread.active;
 }
@@ -462,7 +465,7 @@ static void StackSnifferResume(void)
 	#define StackSnifferInstall()	((void) 0)
 	#define StackSnifferRemove()	((void) 0)
 	#define StackSnifferResume()	((void) 0)
-
+	
 #endif /* THREAD_STACK_SNIFFER */
 
 /*----------------------------------------------------------------------------*/
@@ -478,7 +481,7 @@ static void StackSnifferResume(void)
 /*	Threads are kept in a circular queue of threads. A doubly-linked list is
 	used to make removal of an arbitrary thread (not just the head of the
 	queue) efficient. */
-
+	
 #if THREAD_DEBUG
 
 /* ThreadQueueValid returns true if the queue is valid. */
@@ -489,10 +492,9 @@ static Boolean ThreadQueueValid(ThreadQueuePtr queue)
 	if (queue->nelem == 0 && (queue->head || queue->tail)) return(false);
 	if (queue->nelem > 0 && (! queue->head || ! queue->tail)) return(false);
 	if (queue->nelem == 1 && queue->head != queue->tail) return(false);
-	if (queue->nelem > 1 && queue->head == queue->tail) return(false); // Should not happen in circular list > 1
+	if (queue->nelem > 1 && queue->head == queue->tail) return(false);
 	if (queue->head && ! ThreadValid(queue->head)) return(false);
 	if (queue->tail && ! ThreadValid(queue->tail)) return(false);
-	// Add more checks for circular list integrity if needed
 	return(true);
 }
 
@@ -503,26 +505,25 @@ static void ThreadEnqueue(ThreadQueuePtr queue, ThreadPtr thread)
 {
 	require(ThreadQueueValid(queue));
 	require(ThreadValid(thread));
-	require(thread->next == NULL); // Use NULL check instead of !ThreadValid
-	require(thread->prev == NULL); // Use NULL check instead of !ThreadValid
-
+	require(! ThreadValid(thread->next));
+	require(! ThreadValid(thread->prev));
 	if (! queue->head) {
 		check(! queue->tail);
 		queue->head = queue->tail = thread;
-		thread->prev = thread->next = thread; // Point to self in single-element list
+		thread->prev = thread->next = thread;
 	}
 	else {
 		check(queue->tail != NULL);
+		queue->tail->next = thread;
 		thread->prev = queue->tail;
 		thread->next = queue->head;
-		queue->tail->next = thread;
 		queue->head->prev = thread;
 		queue->tail = thread;
 	}
 	queue->nelem++;
 	ensure(queue->tail == thread);
-	ensure(thread->next != NULL); // Ensure links are set
-	ensure(thread->prev != NULL); // Ensure links are set
+	ensure(ThreadValid(thread->next));
+	ensure(ThreadValid(thread->prev));
 	ensure(ThreadQueueValid(queue));
 }
 
@@ -531,31 +532,33 @@ static void ThreadDequeue(ThreadQueuePtr queue, ThreadPtr thread)
 {
 	require(ThreadQueueValid(queue));
 	require(ThreadValid(thread));
-	require(thread->next != NULL); // Check links are valid before use
-	require(thread->prev != NULL);
+	require(ThreadValid(thread->next));
+	require(ThreadValid(thread->prev));
 	require(queue->nelem > 0);
-
-	if (queue->nelem == 1) {
-		check(thread == queue->head && thread == queue->tail);
-		queue->head = queue->tail = NULL;
-	} else {
-		thread->prev->next = thread->next;
-		thread->next->prev = thread->prev;
-		if (thread == queue->head) {
-			queue->head = thread->next;
-		}
-		if (thread == queue->tail) {
-			queue->tail = thread->prev;
+	if (thread == queue->head || thread == queue->tail) {
+		if (queue->nelem == 1)
+			queue->head = queue->tail = NULL;
+		else {
+			if (thread == queue->head)
+				queue->head = thread->next;
+			else
+				queue->tail = thread->prev;
+			queue->tail->next = queue->head;
+			queue->head->prev = queue->tail;
 		}
 	}
-
-	thread->next = thread->prev = NULL; // Invalidate links of dequeued item
+	else {
+		check(thread->prev != thread && thread->next != thread);
+		check(queue->nelem > 0);
+		thread->prev->next = thread->next;
+		thread->next->prev = thread->prev;
+	}
+	thread->next = thread->prev = NULL;
 	queue->nelem--;
-	ensure(thread->next == NULL);
-	ensure(thread->prev == NULL);
+	ensure(! ThreadValid(thread->next));
+	ensure(! ThreadValid(thread->prev));
 	ensure(ThreadQueueValid(queue));
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*	�Error Handling */
@@ -583,7 +586,7 @@ OSErr ThreadError(void)
 /*	ThreadSN returns the thread's serial number. The error code is not changed. */
 static ThreadType ThreadSN(ThreadPtr thread)
 {
-	// require(! thread || ThreadValid(thread)); // Removed assertion for performance/simplicity
+	require(! thread || ThreadValid(thread));
 	return(thread ? thread->sn : THREAD_NONE);
 }
 
@@ -591,41 +594,23 @@ static ThreadType ThreadSN(ThreadPtr thread)
 	thread pointer, or NULL if there is no thread with the specified serial
 	number. If the thread is found the error code is cleared, otherwise it's
 	set to threadNotFoundErr. */
-static ThreadPtr ThreadFromSN(register ThreadType tsn) // Keep register keyword if desired
+static ThreadPtr ThreadFromSN(register ThreadType tsn)
 {
 	register ThreadPtr thread;
 	register short nthread;
-
-	// require(0 <= tsn && tsn <= gThread.lastsn); // Removed assertion
-
-	if (tsn == THREAD_NONE || gThread.queue.nelem == 0) {
-		 gThread.error = threadNotFoundErr;
-		 FailThreadError();
-		 return NULL;
-	}
-
+		
+	require(0 <= tsn && tsn <= gThread.lastsn);
 	thread = gThread.queue.head;
 	nthread = gThread.queue.nelem;
-	while (nthread-- > 0) { // Iterate only up to nelem times
-		if (thread->sn == tsn) {
-			gThread.error = noErr;
-			// ensure(ThreadValid(thread) && thread->sn == tsn); // Removed assertion
-			return thread;
-		}
+	while (nthread-- > 0 && thread->sn != tsn)
 		thread = thread->next;
-		if (thread == gThread.queue.head && nthread > 0) {
-			// Should not happen in a correctly maintained circular list unless tsn not found
-			break;
-		}
-	}
-
-	// If loop finishes without finding, tsn is invalid
-	gThread.error = threadNotFoundErr;
+	if (thread && thread->sn != tsn)
+		thread = NULL;
+	gThread.error = (thread ? noErr : threadNotFoundErr);
 	FailThreadError();
-	// ensure(! thread || (ThreadValid(thread) && thread->sn == tsn)); // Removed assertion
-	return(NULL);
+	ensure(! thread || (ThreadValid(thread) && thread->sn == tsn));
+	return(thread);
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*	�Accessing the Queue of Threads */
@@ -666,12 +651,10 @@ ThreadType ThreadFirst(void)
 ThreadType ThreadNext(ThreadType tsn)
 {
 	ThreadPtr thread;
-
+	
 	thread = ThreadFromSN(tsn);
-	// If ThreadFromSN failed, it set the error code already.
 	return(thread ? ThreadSN(thread->next) : THREAD_NONE);
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*	�Thread Status */
@@ -689,10 +672,9 @@ ThreadType ThreadNext(ThreadType tsn)
 ThreadStatusType ThreadStatus(ThreadType tsn)
 {
 	ThreadPtr thread;
-
+	
 	thread = ThreadFromSN(tsn);
-	// If ThreadFromSN failed, it set the error code already.
-	return(thread ? thread->status : THREAD_STATUS_NORMAL); // Return default if thread not found
+	return(thread ? thread->status : THREAD_STATUS_NORMAL);
 }
 
 /*	�ThreadStatusSet sets the status code for the thread. It is the
@@ -711,13 +693,12 @@ ThreadStatusType ThreadStatus(ThreadType tsn)
 void ThreadStatusSet(ThreadType tsn, ThreadStatusType status)
 {
 	ThreadPtr thread;
-
+	
 	thread = ThreadFromSN(tsn);
 	if (thread)
 		thread->status = status;
-	// ensure(! thread || ThreadStatus(tsn) == status); // Removed assertion
+	ensure(! thread || ThreadStatus(tsn) == status);
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*	�Application Defined Data */
@@ -728,9 +709,8 @@ void ThreadStatusSet(ThreadType tsn, ThreadStatusType status)
 void *ThreadData(ThreadType tsn)
 {
 	ThreadPtr thread;
-
+	
 	thread = ThreadFromSN(tsn);
-	// If ThreadFromSN failed, it set the error code already.
 	return(thread ? thread->data : NULL);
 }
 
@@ -739,13 +719,12 @@ void *ThreadData(ThreadType tsn)
 void ThreadDataSet(ThreadType tsn, void *data)
 {
 	ThreadPtr thread;
-
+	
 	thread = ThreadFromSN(tsn);
 	if (thread)
 		thread->data = data;
-	// ensure(! thread || ThreadData(tsn) == data); // Removed assertion
+	ensure(! thread || ThreadData(tsn) == data);
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*	�Information About the Stack */
@@ -758,7 +737,7 @@ void ThreadDataSet(ThreadType tsn, void *data)
 size_t ThreadStackMinimum(void)
 {
 	gThread.error = noErr;
-	return((size_t)LMGetMinStack()); // Cast to size_t
+	return(LMGetMinStack());
 }
 
 /*	�ThreadStackDefault returns the default stack size for a thread. This
@@ -767,7 +746,7 @@ size_t ThreadStackMinimum(void)
 size_t ThreadStackDefault(void)
 {
 	gThread.error = noErr;
-	return((size_t)LMGetDefltStack()); // Cast to size_t
+	return(LMGetDefltStack());
 }
 
 /*	�ThreadStackSpace returns the amount of stack space remaining in the
@@ -775,7 +754,7 @@ size_t ThreadStackDefault(void)
 	between the thread's stack pointer and the bottom of the thread's
 	stack, though slightly more space may be available to the application
 	due to overhead from Thread Library.
-
+	
 		NOTE: The trap StackSpace will return incorrect results if called from
 		any thread other than the main thread. Likewise, using ApplLimit, HeapEnd,
 		or CurStackBase to determine the bounds of a thread's stack will produce
@@ -788,40 +767,31 @@ size_t ThreadStackSpace(ThreadType tsn)
 	Ptr stack_bottom;
 	jmp_buf registers;
 	ThreadPtr thread;
-	Ptr current_sp;
-
+	
 	result = 0;
 	thread = ThreadFromSN(tsn);
 	if (thread) {
 		if (thread == gThread.main)
-			stack_bottom = LMGetApplLimit();
+			stack_bottom = GetApplLimit();
 		else
 			stack_bottom = thread->stack;
-
 		if (thread == gThread.active) {
-			// Get current stack pointer (A7) using inline assembly for GCC
-			asm volatile ("move.l %%a7, %0" : "=a" (current_sp));
-			// check(current_sp >= stack_bottom); // Removed assertion
-			if (current_sp >= stack_bottom) { // Basic sanity check
-				result = (size_t)(current_sp - stack_bottom);
-			} else {
-				result = 0; // Should not happen
-			}
+			(void) setjmp(registers);
+			// check((Ptr) registers[a7] >= stack_bottom);
+			check((Ptr) registers[JMP_BUF_A7_INDEX] >= stack_bottom);
+			// result = (Ptr) registers[a7] - stack_bottom;
+			result = (Ptr) registers[JMP_BUF_A7_INDEX] - stack_bottom;
 		}
 		else {
-			current_sp = (Ptr) thread->jmpenv[a7];
-			// check(current_sp >= stack_bottom); // Removed assertion
-			if (current_sp >= stack_bottom) { // Basic sanity check
-				result = (size_t)(current_sp - stack_bottom);
-			} else {
-				result = 0; // Should not happen
-			}
+			// check((Ptr) thread->jmpenv[a7] >= stack_bottom);
+			check((Ptr) thread->jmpenv[JMP_BUF_A7_INDEX] >= stack_bottom);
+			// result = (Ptr) thread->jmpenv[a7] - stack_bottom;
+			result = (Ptr) thread->jmpenv[JMP_BUF_A7_INDEX] - stack_bottom;
 		}
 	}
-	// ensure(result >= 0); // Result is unsigned, always >= 0
+	ensure(result >= 0);
 	return(result);
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*	�Support for Segmentation */
@@ -836,23 +806,21 @@ void ThreadStackFrame(ThreadType tsn, ThreadStackFrameType *frame)
 {
 	ThreadPtr thread;
 	jmp_buf registers;
-	Ptr current_sp;
-	Ptr current_a6;
-
+	
 	/* initialize and convert serial number into a thread pointer */
 	frame->stack_top = frame->stack_bottom = frame->register_a6 = NULL;
-	thread = (tsn ? ThreadFromSN(tsn) : NULL); // Error code set by ThreadFromSN if tsn invalid
+	thread = (tsn ? ThreadFromSN(tsn) : NULL);
 
 	/* Get the top of the thread's stack. All threads other than the main
 		thread use their own private stacks. If no thread is specified
 		then the top of the stack defaults to the top of the application's
 		stack. */
-	if (thread && thread != gThread.main && thread->stack) {
-		// check(thread != gThread.main); // Removed assertion
+	if (thread && thread->stack) {
+		check(thread != gThread.main);
 		frame->stack_top = thread->stack + GetPtrSize(thread->stack);
 	}
 	else {
-		// check(thread == gThread.main || thread == NULL); // Removed assertion
+		check(thread == gThread.main);
 		frame->stack_top = LMGetCurStackBase();
 	}
 
@@ -860,35 +828,28 @@ void ThreadStackFrame(ThreadType tsn, ThreadStackFrameType *frame)
 		/* Registers a6 and a7 point into the active thread's stack so we can
 			use their current values. This is the default case if there are no
 			threads (in which case 'thread' and gThread.active are both null). */
-		// check(! thread || ThreadValid(thread)); // Removed assertion
-
-		// Get current SP (A7) and A6 using inline assembly for GCC
-		asm volatile ("move.l %%a7, %0" : "=a" (current_sp));
-		asm volatile ("move.l %%a6, %0" : "=a" (current_a6));
-
-		frame->stack_bottom = current_sp;
-		frame->register_a6 = current_a6; // Get A6 directly
+		check(! thread || ThreadValid(thread));
+		(void) setjmp(registers);
+		// frame->stack_bottom = (Ptr) registers[a7];
+		frame->stack_bottom = (Ptr) registers[JMP_BUF_A7_INDEX];
+		// frame->register_a6 = *(Ptr *) registers[a6];
+		frame->register_a6 = *(Ptr *) registers[JMP_BUF_A6_INDEX];
 	}
-	else if (thread) { // Handle inactive threads
+	else {
 		/* For inactive threads, we use the values of registers a6 and a7 that
 			were saved when the thread was suspended. */
-		// check(ThreadValid(thread)); // Removed assertion
-		frame->stack_bottom = (Ptr) thread->jmpenv[a7];
-		frame->register_a6 = (Ptr) thread->jmpenv[a6];
-	} else {
-        // If tsn was invalid or THREAD_NONE, frame remains initialized to NULLs
-        // Get current A6/A7 anyway? Or leave as NULL? Leaving as NULL seems safer.
-        // Let's get current A6/A7 like the active case if thread is NULL
-		asm volatile ("move.l %%a7, %0" : "=a" (current_sp));
-		asm volatile ("move.l %%a6, %0" : "=a" (current_a6));
-        frame->stack_bottom = current_sp;
-		frame->register_a6 = current_a6;
-    }
-
-	// ensure(! frame->register_a6 || (frame->stack_bottom <= frame->register_a6 && frame->register_a6 <= frame->stack_top)); // Removed assertion
-	// ensure((Ptr) 0 < frame->stack_bottom && frame->stack_bottom <= frame->stack_top); // Removed assertion
+		check(ThreadValid(thread));
+		// frame->stack_bottom = (Ptr) thread->jmpenv[a7];
+		frame->stack_bottom = (Ptr) thread->jmpenv[JMP_BUF_A7_INDEX];
+		// frame->register_a6 = (Ptr) thread->jmpenv[a6];
+		frame->register_a6 = (Ptr) thread->jmpenv[JMP_BUF_A6_INDEX];
+	}
+	ensure(! frame->register_a6 ||
+			(frame->stack_bottom <= frame->register_a6 &&
+		 	 frame->register_a6 <= frame->stack_top));
+	ensure((Ptr) 0 < frame->stack_bottom &&
+			 frame->stack_bottom <= frame->stack_top);
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*	�Scheduling */
@@ -912,14 +873,11 @@ static void ThreadSleepSetPtr(ThreadPtr thread, ThreadTicksType sleep)
 	/* Set the thread's wakeup time, being careful with overflow since the
 		sleep parameter could be THREAD_TICKS_MAX. */
 	ticks = LMGetTicks();
-	// Check for overflow before adding
-	if (sleep > 0 && (THREAD_TICKS_MAX - sleep) < ticks) {
+	if (sleep > THREAD_TICKS_MAX - ticks)
 		thread->wake = THREAD_TICKS_MAX;
-	} else {
+	else
 		thread->wake = ticks + sleep;
-	}
 }
-
 
 /* �ThreadSleepSet sets the amount of time that the specified thread will
 	remain inactive.  The 'sleep' parameter specifies the maximum amount
@@ -937,13 +895,12 @@ static void ThreadSleepSetPtr(ThreadPtr thread, ThreadTicksType sleep)
 void ThreadSleepSet(ThreadType tsn, ThreadTicksType sleep)
 {
 	ThreadPtr thread;
-
+	
 	thread = ThreadFromSN(tsn);
 	if (thread)
 		ThreadSleepSetPtr(thread, sleep);
-	// Error code set by ThreadFromSN if tsn invalid
 }
-
+	
 /*	EventPending returns true if an event is pending. Most events are posted
 	to the event queue, so we can determine if an event is pending simply
 	by examining the head of the event queue. Activate and update events,
@@ -954,22 +911,17 @@ void ThreadSleepSet(ThreadType tsn, ThreadTicksType sleep)
 static Boolean EventPending(void)
 {
 	#define EVENT_PENDING_INTERVAL (15)
-	static ThreadTicksType nextEventCheck = 0; // Initialize static variable
+	static ThreadTicksType nextEvent;
 	EventRecord event;
-	Boolean pending = false; // Initialize
+	Boolean pending;
 
-	// Check event queue directly first (fast)
-	if (LMGetEventQueue()->qHead != NULL) {
-		pending = true;
-	}
-	// Periodically check EventAvail for non-queued events (slower)
-	else if (LMGetTicks() >= nextEventCheck) {
-		pending = EventAvail(everyEvent, &event); // Check all events
-		nextEventCheck = LMGetTicks() + EVENT_PENDING_INTERVAL;
+	pending = false;
+	if (LMGetEventQueue()->qHead || LMGetTicks() >= nextEvent) {
+		pending = EventAvail(everyEvent, &event);
+		nextEvent = LMGetTicks() + EVENT_PENDING_INTERVAL;
 	}
 	return(pending);
 }
-
 
 /* ThreadSchedulePtr is identical to ThreadSchedule, except it returns a pointer
 	to a thread instead of a thread serial number. This makes context switches
@@ -981,11 +933,9 @@ static ThreadPtr ThreadSchedulePtr(void)
 	register ThreadPtr active;			/* active thread */
 	register ThreadPtr newthread;		/* thread to switch to */
 	register ThreadTicksType ticks;	/* current tick count */
-	register short count;             /* loop counter */
-
+	
 	require(ThreadValid(gThread.active));
 	gThread.error = noErr;
-
 	if (EventPending()) {
 		/* an event is pending, so return main thread */
 		newthread = gThread.main;
@@ -995,43 +945,25 @@ static ThreadPtr ThreadSchedulePtr(void)
 		ticks = LMGetTicks();
 		active = gThread.active;
 		newthread = active->next;
-		count = gThread.queue.nelem; // Limit search iterations
-
-		// check(ThreadValid(newthread)); // Removed assertion
-
-		// Search starting from the next thread
-		while (count-- > 0) {
-			if (newthread->wake <= ticks) {
-				// Found a ready thread
-				break;
-			}
+		check(ThreadValid(newthread));
+		while (newthread != active && newthread->wake > ticks) {
 			newthread = newthread->next;
-			// check(ThreadValid(newthread)); // Removed assertion
+			check(ThreadValid(newthread));
 		}
-
-		// If loop finished and newthread is still the active one,
-		// and it's not ready, then no other thread is ready.
 		if (newthread == active && newthread->wake > ticks) {
 			/* no thread needs to be woken up, so return main thread */
 			newthread = gThread.main;
 		}
-		// If loop finished and newthread is *not* the active one,
-		// it means we wrapped around and didn't find a ready thread.
-		else if (count < 0) {
-			newthread = gThread.main;
-		}
-		// Otherwise, 'newthread' points to the first ready thread found.
 	}
 	ensure(ThreadValid(newthread));
 	return(newthread);
 }
 
-
 /*	�ThreadSchedule returns the next thread to activate. Threads are maintained
 	in a queue and are scheduled in a round-robbin fashion. Starting with the
 	current thread, the queue of threads is searched for the next thread whose
-	wake time has arrived. The first such thread found is returned.
-
+	wake time has arrived. The first such thread found is returned. 
+		
 	In addition to the round-robbin scheduling shared with all threads, the
 	main thread will also be activated if any events are pending in the event
 	queue. The application can then immediately handle the events, allowing
@@ -1084,16 +1016,16 @@ static void ThreadRestore(void)
 {
 	register ThreadQueuePtr queue; /* for faster access to queue */
 	register ThreadPtr thread;		 /* for faster access to thread */
-
+	
 	require(ThreadValid(gThread.active));
-
+	
 	/* put things into registers */
 	thread = gThread.active;
 	queue = &gThread.queue;
-
+	
 	/* activate the stack sniffer VBL for the new active thread */
 	StackSnifferResume();
-
+	
 	/* Restore the exception state for the thread. The first
 		time this is executed it clears and resets the exception
 		state, since the exception field of the thread structure
@@ -1117,7 +1049,7 @@ static void ThreadRestore(void)
 		DisposePtr((Ptr) gThread.dispose);
 		gThread.dispose = NULL;
 	}
-
+	
 	/* Move the thread to the tail of the queue so that it is rescheduled
 		to run after all other threads (though scheduling also depends on
 		wake times and priority). Functionally, the move-to-tail is always
@@ -1127,24 +1059,19 @@ static void ThreadRestore(void)
 		head and tail pointers to achieve the same result. We do the
 		optimization in-line since the function call overhead could be
 		significant over many context switches. */
-	if (queue->nelem > 1) { // Only move if more than one thread
-		if (thread == queue->head) {
-			queue->head = thread->next;
-			queue->tail = thread;
-		}
-		// No need to move if it's already the tail
-		// else if (thread != queue->tail) {
-		//	ThreadDequeue(queue, thread); // This is inefficient, avoid if possible
-		//	ThreadEnqueue(queue, thread);
-		//}
+	if (thread == queue->head) {
+		queue->head = thread->next;
+		queue->tail = thread;
 	}
-
-
+	else if (thread != queue->tail) {
+		ThreadDequeue(queue, thread);
+		ThreadEnqueue(queue, thread);
+	}
+			
 	/* call the application's resume function */
 	if (thread->resume)
 		thread->resume(thread->data);
 }
-
 
 /* ThreadActivatePtr is identical to ThreadActivate, except it takes a pointer
 	to a thread instead of a thread serial number. This makes context switches
@@ -1152,16 +1079,16 @@ static void ThreadRestore(void)
 	access to the relavent thread pointers and so don't need to waste time
 	converting to and from thread serial numbers. */
 static void ThreadActivatePtr(ThreadPtr thread)
-{
+{	
 	require(ThreadValid(gThread.active));
 	require(ThreadValid(thread));
 	if (thread != gThread.active) {
 		if (setjmp(gThread.active->jmpenv) == THREAD_SAVE) {
-
+		
 			/* the thread is being deactivated, so do whatever is needed to
 				save the active thread's context */
 			ThreadSave();
-
+			
 			/* Jump to the specified thread. This suspends the current thread
 				and returns at the setjmp statement above (unless this is the
 				first time the thread is being executed, in which case it
@@ -1171,7 +1098,7 @@ static void ThreadActivatePtr(ThreadPtr thread)
 				thread can resume. */
 			gThread.active = thread;
 			longjmp(thread->jmpenv, THREAD_RUN);
-			// check(false); /* doesn't return */ // Removed assertion
+			check(false); /* doesn't return */
 		}
 		else {
 			/* the thread is being activated, so restore the thread's context */
@@ -1180,7 +1107,6 @@ static void ThreadActivatePtr(ThreadPtr thread)
 	}
 	/* ensure(gThread.active == thread); */ /* can't evaluate this postcondition */
 }
-
 
 /*	�ThreadActivate activates the specified thread. The context switch is
 	accomplished by saving the CPU context with setjmp and then calling
@@ -1194,12 +1120,11 @@ static void ThreadActivatePtr(ThreadPtr thread)
 void ThreadActivate(ThreadType tsn)
 {
 	ThreadPtr thread;
-
+	
 	require(ThreadValid(gThread.active));
 	thread = ThreadFromSN(tsn);
 	if (thread)
 		ThreadActivatePtr(thread);
-	// Error code set by ThreadFromSN if tsn invalid
 	/* ensure(! thread || ThreadActive() == tsn); */ /* can't evaluate this postcondition */
 }
 
@@ -1233,44 +1158,25 @@ ThreadTicksType ThreadYieldInterval(void)
 	ThreadPtr active;				/* currently active thread */
 	ThreadTicksType ticks;		/* current tick count */
 	ThreadTicksType interval;	/* interval till next call to ThreadYield */
-	ThreadTicksType current_interval; /* interval for current thread */
-	short count;                  /* loop counter */
-
-	if (!gThread.active) return THREAD_TICKS_MAX; // No active thread? Return max.
-
+	
 	require(ThreadValid(gThread.active));
 	gThread.error = noErr;
 	ticks = LMGetTicks();
 	active = gThread.active;
 	thread = active->next;
 	interval = THREAD_TICKS_MAX;
-	count = gThread.queue.nelem; // Limit iterations
-
-	// check(ThreadValid(thread)); // Removed assertion
-
-	while (count-- > 0 && interval > 0) { // Stop if interval is 0
-		if (thread == active) { // Skip active thread
-			thread = thread->next;
-			continue;
-		}
-
-		if (thread->wake <= ticks) {
-			interval = 0; // Found a ready thread, yield immediately
-			break;
-		} else {
-			current_interval = thread->wake - ticks;
-			if (current_interval < interval) {
-				interval = current_interval;
-			}
-		}
+	check(ThreadValid(thread));
+	while (thread != active && interval) {
+		if (thread->wake <= ticks)
+			interval = 0;
+		else if (thread->wake - ticks < interval)
+			interval = thread->wake - ticks;
 		thread = thread->next;
-		// check(ThreadValid(thread)); // Removed assertion
+		check(ThreadValid(thread));
 	}
-
-	// ensure(interval >= 0); // Interval is unsigned, always >= 0
+	ensure(interval >= 0);
 	return(interval);
 }
-
 
 /*----------------------------------------------------------------------------*/
 /*	�Thread Creation and Destruction */
@@ -1281,50 +1187,42 @@ ThreadTicksType ThreadYieldInterval(void)
 static void ThreadEndPtr(ThreadPtr thread)
 {
 	ThreadPtr newthread; /* thread to activate if disposing of the active thread */
-
+	
 	require(ThreadValid(thread));
 
 	newthread = NULL;
 	if (thread == gThread.main) {
-
+		
 		/* We're disposing of the main thread, so this is a good time
 			to do any final cleanup of the thread library. */
-
+			
 		/* clear globals */
 		check(gThread.active == thread);
 		check(gThread.queue.nelem == 1);
-
+		gThread.main = gThread.active = NULL;
+		
 		/* remove our stack sniffer VBL task */
 		StackSnifferRemove();
-
-		/* Dequeue before setting globals to NULL */
-		ThreadDequeue(&gThread.queue, thread);
-		gThread.main = gThread.active = NULL;
-
-
+		
 	}
 	else if (thread == gThread.active) {
-
+	
 		/* We're disposing of the active thread, so activate the next
 			scheduled thread, or the main thread if the next scheduled
 			thread is the active thread. */
 		newthread = ThreadSchedulePtr();
-		if (newthread == gThread.active) // If scheduler picks self, pick main
+		if (newthread == gThread.active)
 			newthread = gThread.main;
-
-		/* Dequeue the thread *before* switching context */
-		ThreadDequeue(&gThread.queue, thread);
-
-	} else {
-		/* Disposing of an inactive thread */
-		ThreadDequeue(&gThread.queue, thread);
+			
 	}
-
-
-	// check(! newthread || newthread != gThread.active); // Removed assertion
-
+	
+	check(! newthread || newthread != gThread.active);
+	
+	/* remove thread from queue */
+	ThreadDequeue(&gThread.queue, thread);
+	
 	if (thread == gThread.active && newthread) {
-
+	
 		/* We're disposing of the active thread, but we can't dispose of
 			the thread's stack since we're still using that stack. So
 			we delay disposal of the thread until the next thread is
@@ -1337,16 +1235,15 @@ static void ThreadEndPtr(ThreadPtr thread)
 			there's no need to save the now-defunct thread's state) */
 		gThread.active = newthread;
 		longjmp(newthread->jmpenv, THREAD_RUN);
-		// check(false); /* doesn't return */ // Removed assertion
+		check(false); /* doesn't return */
 	}
 	else {
-		/* dispose of the memory allocated for the thread (inactive or main) */
-		if (thread->stack) // Only dispose stack if it exists (not for main)
+		/* dispose of the memory allocated for the thread */
+		if (thread->stack)
 			DisposePtr(thread->stack);
 		DisposePtr((Ptr) thread);
 	}
 }
-
 
 /*	�ThreadEnd removes the thread from the queue and disposes of the memory
 	allocated for the thread. If the thread is the active thread then the
@@ -1355,11 +1252,10 @@ static void ThreadEndPtr(ThreadPtr thread)
 void ThreadEnd(ThreadType tsn)
 {
 	ThreadPtr thread;
-
+	
 	thread = ThreadFromSN(tsn);
 	if (thread)
 		ThreadEndPtr(thread);
-	// Error code set by ThreadFromSN if tsn invalid
 	/* ensure(! ThreadValid(ThreadFromSN(tsn))); */ /* can't execute this */
 }
 
@@ -1368,10 +1264,10 @@ void ThreadEnd(ThreadType tsn)
 	other threads with ThreadBegin. You must also call MaxApplZone before
 	calling this function. The 'resume', 'suspend', and 'data' parameters
 	have the same meanings as the parameters to ThreadBegin.
-
+	
 	There are several important differences between the main thread and
 	all subsequently created threads.
-
+	
 	- The main thread is responsible for handling events sent to the
 	application, and is therefore scheduled differently from other threads;
 	see ThreadSchedule for details.
@@ -1379,7 +1275,7 @@ void ThreadEnd(ThreadType tsn)
 	- While other threads don't begin executing until they're scheduled to
 	execute, the main thread is made the active thread and starts to run as
 	soon as ThreadBeginMain returns.
-
+	
 	- Since other threads have a special entry point, they are automatically
 	disposed of when that entry point returns. The main thread, lacking
 	any special entry point, must be disposed of by the application. You
@@ -1406,49 +1302,45 @@ ThreadType ThreadBeginMain(ThreadProcType suspend, ThreadProcType resume,
 		initializations of the thread library. Conversely, when the
 		main thread is disposed of would be a good time to do
 		any final cleanup of the thread library. */
-
+		
 	gThread.error = noErr;
 
 	/* allocate thread structure */
-	thread = (ThreadPtr) NewPtrClear(sizeof(ThreadStructure));
-	if (!thread) {
-		gThread.error = MemError(); // Get actual error
-		FailThreadError();
-		return THREAD_NONE; // Return invalid thread
+	if (MemAvailable(sizeof(ThreadStructure))) {
+		thread = (ThreadPtr) NewPtrClear(sizeof(ThreadStructure));
+		gThread.error = MemError();
 	}
-
-	/* initialize thread structure */
-	thread->suspend = suspend;
-	thread->resume = resume;
-	thread->data = data;
-	thread->sn = ++gThread.lastsn;
-	thread->stack = NULL; // Main thread has no separate stack ptr
-	thread->entry = NULL; // Main thread has no entry point
-
-	/* save values of low-memory globals */
-	thread->heapEnd = LMGetHeapEnd();
-	thread->applLimit = LMGetApplLimit();
-	thread->hiHeapMark = LMGetHiHeapMark();
-
-	/* make this thread the active and main thread */
-	gThread.active = thread;
-	gThread.main = thread;
-
-	/* now that the thread is ready to use, append it to the queue of threads
-		so that it can be scheduled for execution */
-	ThreadEnqueue(&gThread.queue, thread);
-
-	/* install and activate stack sniffer VBL task */
-	StackSnifferInstall();
-	StackSnifferResume(); // Resume for the main thread
-
-	// FailThreadError(); // Already checked allocation error
+	if (thread) {
+	
+		/* initialize thread structure */
+		thread->suspend = suspend;
+		thread->resume = resume;
+		thread->data = data;
+		thread->sn = ++gThread.lastsn;
+		
+		/* save values of low-memory globals */
+		thread->heapEnd = LMGetHeapEnd();
+		thread->applLimit = LMGetApplLimit();
+		thread->hiHeapMark = LMGetHiHeapMark();
+		
+		/* make this thread the active and main thread */
+		gThread.active = thread;
+		gThread.main = thread;
+		
+		/* now that the thread is ready to use, append it to the queue of threads
+			so that it can be scheduled for execution */
+		ThreadEnqueue(&gThread.queue, thread);
+		
+		/* install and activate stack sniffer VBL task */
+		StackSnifferInstall();
+		StackSnifferResume();
+	}
+	FailThreadError();
 	ensure(thread ? ThreadValid(thread) && ! ThreadError() : ThreadError());
 	ensure(thread == gThread.main);
 	ensure(gThread.active == gThread.main);
 	return(ThreadSN(thread));
 }
-
 
 /*	�ThreadBegin creates a new thread and returns the thread's serial number.
 	You must create the main thread with ThreadBeginMain before you can call
@@ -1461,7 +1353,7 @@ ThreadType ThreadBeginMain(ThreadProcType suspend, ThreadProcType resume,
 	restore additional application defined context for the thread. The
 	'data' parameter is passed to the 'entry', 'suspend', and 'resume'
 	functions and may contain any application defined data.
-
+	
 	The 'stack_size' parameter specifies the size of the stack needed by
 	the thread. The requested stack size should be large enough to contain
 	all function calls, local variables and parameters, and any operating
@@ -1478,12 +1370,12 @@ ThreadType ThreadBeginMain(ThreadProcType suspend, ThreadProcType resume,
 	block's header. For this reason, you can often detect stack overflow by
 	enabling a "heap check" option in a low-level debugger such as TMON or
 	MacsBug.
-
+	
 	The new thread is appended to the end of the thread queue, making it
 	eligible for scheduling whenever ThreadYield is called. ThreadBegin
 	returns immediately after creating the new thread. The thread, however,
 	is not executed immediately, but rather is executed whenever it is
-	scheduled to start. At that time, the function specified in the 'entry'
+	scheduled to execute. At that time, the function specified in the 'entry'
 	parameter is called. When the function has returned, the thread is removed
 	from the queue of threads and its stack and any private storage allocated
 	by ThreadBegin are disposed of. */
@@ -1492,125 +1384,113 @@ ThreadType ThreadBegin(ThreadProcType entry,
 	void *data, size_t stack_size)
 {
 	ThreadPtr thread = NULL; /* the new thread */
-
+	
 	require(ThreadValid(gThread.main));
 	require(entry != NULL);
-	require(stack_size >= 0); // size_t is unsigned
+	require(0 <= stack_size);
 
 	gThread.error = noErr;
 
 	/* allocate thread structure */
-	thread = (ThreadPtr) NewPtrClear(sizeof(ThreadStructure));
-	if (!thread) {
+	if (MemAvailable(sizeof(ThreadStructure))) {
+		thread = (ThreadPtr) NewPtrClear(sizeof(ThreadStructure));
 		gThread.error = MemError();
-		FailThreadError();
-		return THREAD_NONE;
 	}
-
-	/* initialize thread structure */
-	thread->entry = entry;
-	thread->suspend = suspend;
-	thread->resume = resume;
-	thread->data = data;
-	thread->sn = ++gThread.lastsn;
-
-	/* The main thread uses the application's regular stack, while
-		nonrelocatable blocks are allocated to contain the stacks of
-		all other threads. Since the stack persists until the thread
-		that created it terminates, you can create any object you
-		require on a thread's stack, including window records and parameter
-		blocks. The main advantage of using separate stacks, however,
-		is the speed of context switches. A context switch involves
-		only a call to longjmp; no time consuming saving and restoring
-		of stacks is necessary. */
-	if (stack_size == 0)
-		stack_size = ThreadStackDefault();
-
-	// Ensure minimum stack size if THREAD_DEBUG is enabled
-	#if THREAD_DEBUG
-		if (stack_size < ThreadStackMinimum()) {
-			// Optionally warn or increase size here
-			// stack_size = ThreadStackMinimum();
+	if (thread) {
+	
+		/* initialize thread structure */
+		thread->entry = entry;
+		thread->suspend = suspend;
+		thread->resume = resume;
+		thread->data = data;
+		thread->sn = ++gThread.lastsn;
+			
+		/* The main thread uses the application's regular stack, while
+			nonrelocatable blocks are allocated to contain the stacks of
+			all other threads. Since the stack persists until the thread
+			that created it terminates, you can create any object you
+			require on a thread's stack, including window records and parameter
+			blocks. The main advantage of using separate stacks, however,
+			is the speed of context switches. A context switch involves
+			only a call to longjmp; no time consuming saving and restoring
+			of stacks is necessary. */
+		if (! stack_size)
+			stack_size = ThreadStackDefault();
+		if (MemAvailable(stack_size)) {
+			thread->stack = NewPtr(stack_size);
+			gThread.error = MemError();
 		}
-	#endif
+		if (thread->stack) {
+		
+			/* Since all threads other than the main thread use stacks
+				allocated in the application's heap, we need to disable the
+				stack sniffer VBL task by setting the low-memory global
+				variable StkLowPt to 0. Otherwise, the stack sniffer would
+				generate system error #28. */
+			LMSetStkLowPt(NULL);
+			
+			/* To help the stack sniffer catch stack overrun, we write a
+				long-word at the bottom of the thread's stack. */
+			*(long *) thread->stack = STACK_SNIFFER_SENTINEL;
+			
+			/* Certain low-memory globals divide the stack and heap.
+				We change these globals when a thread other than the
+				main thread is activated so that certain OS traps will
+				work correctly. */
+			thread->heapEnd = thread->stack;
+			thread->applLimit = thread->stack;
+			thread->hiHeapMark = thread->stack;
 
-	thread->stack = NewPtr(stack_size);
-	if (!thread->stack) {
-		gThread.error = MemError();
-		DisposePtr((Ptr) thread); // Clean up allocated thread struct
-		FailThreadError();
-		return THREAD_NONE;
+			/* Set up the new thread's jump environment so that we'll jump
+				here when the thread is first activated. */
+			if (setjmp(thread->jmpenv) == THREAD_RUN) {
+	
+				/* We're now executing the *new* thread (I know, it doesn't
+					look like it, but it's all due to the magic [hell?] of
+					non-local gotos and global variables). At this point,
+					the stack is empty, so we can't access any local variables.
+					All subsequent executions of the thread will go through the
+					setjmp call in ThreadActivate. */
+	
+				/* set up the thread's context */
+				ThreadRestore();
+				
+				/* call the thread's entry point */
+				gThread.active->entry(gThread.active->data);
+					
+				/* dispose of the thread and switch to the next scheduled thread */
+				ThreadEndPtr(gThread.active);
+
+				check(false); /* never returns */
+			}
+	
+			/* Munge the registers in the jump environment so that we start from
+				the top of the thread's stack, and so that tracing function calls
+				on the stack will stop when it reaches the first function executed
+				in the new thread (which will always be ThreadBegin, ensuring that
+				the thread library segment is not unloaded by my automatic segment
+				unloading routines). */
+			// thread->jmpenv[a7] = (long) thread->stack + stack_size;
+			thread->jmpenv[JMP_BUF_A7_INDEX] = (long) thread->stack + stack_size;
+			// thread->jmpenv[a6] = 0;
+			thread->jmpenv[JMP_BUF_A6_INDEX] = 0;
+	
+			/* now that the thread is ready to use, append it to the queue of
+				threads so that it can be scheduled for execution */
+			ThreadEnqueue(&gThread.queue, thread);
+			
+			/* We've now successfully created a new thread and set things up so
+				that the first time the thread is invoked we'll call the thread's
+				entry point. We let the application call ThreadYield in its own
+				time to switch contexts. In other words, the new thread doesn't
+				start executing until it has been scheduled to start. */
+		}
+		else {
+			DisposePtr((Ptr) thread);
+			thread = NULL;
+		}
 	}
-
-	/* Since all threads other than the main thread use stacks
-		allocated in the application's heap, we need to disable the
-		system stack sniffer VBL task by setting the low-memory global
-		variable StkLowPt to 0. Otherwise, the stack sniffer would
-		generate system error #28. We do this only once, perhaps in BeginMain?
-		NOTE: This might interfere with system stability if not done carefully.
-		Consider if this is truly necessary or if relying on the custom
-		stack sniffer is sufficient. For now, let's keep it. */
-	LMSetStkLowPt(NULL);
-
-	/* To help the stack sniffer catch stack overrun, we write a
-		long-word at the bottom of the thread's stack. */
-	#if THREAD_STACK_SNIFFER
-		*(unsigned long *) thread->stack = STACK_SNIFFER_SENTINEL;
-	#endif
-
-	/* Certain low-memory globals divide the stack and heap.
-		We change these globals when a thread other than the
-		main thread is activated so that certain OS traps will
-		work correctly. Store the values needed for this thread. */
-	thread->heapEnd = thread->stack;
-	thread->applLimit = thread->stack;
-	thread->hiHeapMark = thread->stack;
-
-	/* Set up the new thread's jump environment so that we'll jump
-		here when the thread is first activated. */
-	if (setjmp(thread->jmpenv) == THREAD_RUN) {
-
-		/* We're now executing the *new* thread (I know, it doesn't
-			look like it, but it's all due to the magic [hell?] of
-			non-local gotos and global variables). At this point,
-			the stack is empty, so we can't access any local variables.
-			All subsequent executions of the thread will go through the
-			setjmp call in ThreadActivate. */
-
-		/* set up the thread's context */
-		ThreadRestore();
-
-		/* call the thread's entry point */
-		gThread.active->entry(gThread.active->data);
-
-		/* dispose of the thread and switch to the next scheduled thread */
-		ThreadEndPtr(gThread.active);
-
-		// check(false); /* never returns */ // Removed assertion
-	}
-
-	/* Munge the registers in the jump environment so that we start from
-		the top of the thread's stack, and so that tracing function calls
-		on the stack will stop when it reaches the first function executed
-		in the new thread (which will always be ThreadBegin, ensuring that
-		the thread library segment is not unloaded by my automatic segment
-		unloading routines). */
-	// Set Stack Pointer (A7) to top of allocated stack
-	thread->jmpenv[a7] = (long) (thread->stack + stack_size);
-	// Set Frame Pointer (A6) to 0 initially for stack traces
-	thread->jmpenv[a6] = 0;
-
-	/* now that the thread is ready to use, append it to the queue of
-		threads so that it can be scheduled for execution */
-	ThreadEnqueue(&gThread.queue, thread);
-
-	/* We've now successfully created a new thread and set things up so
-		that the first time the thread is invoked we'll call the thread's
-		entry point. We let the application call ThreadYield in its own
-		time to switch contexts. In other words, the new thread doesn't
-		start executing until it has been scheduled to start. */
-
-	// FailThreadError(); // Already checked allocation errors
+	FailThreadError();
 	ensure(thread ? ThreadValid(thread) && ! ThreadError() : ThreadError());
 	return(ThreadSN(thread));
 }

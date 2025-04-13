@@ -49,21 +49,21 @@
 					 - added error alert
 	94/02/10 aih - created */
 
+#include <MacTypes.h>
 #include <Quickdraw.h>
-#include <Gestalt.h>  // Instead of GestaltEqu.h
-#include <Threads.h>
-#include <Traps.h>
-#include "ThreadLib.h"
-#include <Dialogs.h>
-#include <Events.h>
-#include <Memory.h>
-#include <Fonts.h>
 #include <Windows.h>
-#include <Menus.h>
+#include <Events.h>
+#include <Dialogs.h>
 #include <TextEdit.h>
-#include <NumberFormatting.h> // For NumToString
-#include <OSUtils.h>          // For ExitToShell
-#include <Devices.h>          // For SystemTask
+#include <Fonts.h>
+#include <Menus.h>
+#include <ToolUtils.h>
+#include <OSUtils.h>
+#include <Memory.h>
+#include <Gestalt.h>
+#include <Threads.h>     // Apple's Thread Manager header
+#include <Traps.h>
+#include "ThreadLib.h"   // Your custom library header
 
 /*----------------------------------------------------------------------------*/
 /* global definitions and declarations */
@@ -290,30 +290,15 @@ static Boolean EventGet(short mask, EventRecord *event,
 /* dialog utilities */
 /*----------------------------------------------------------------------------*/
 
-/* set the text of the dialog item by drawing directly into its rectangle */
+/* set the text of the dialog item */
 static void SetDText(DialogPtr dlg, short item, const Str255 str)
 {
 	short type;
 	Handle hitem;
 	Rect box;
-	GrafPtr oldPort; // Save the current port
 
-	GetPort(&oldPort); // Get the current port
-	SetPort(dlg);      // Set the port to the dialog window
-
-	GetDialogItem(dlg, item, &type, &hitem, &box); // Get the item's rectangle
-
-	// Erase the area where the text will be drawn
-	EraseRect(&box);
-
-	// Move the pen to a suitable position within the box
-	// Adjust offsets as needed for alignment (e.g., box.bottom - 4 for baseline)
-	MoveTo(box.left + 2, box.bottom - 4);
-
-	// Draw the new string
-	DrawString(str);
-
-	SetPort(oldPort); // Restore the original port
+	GetDialogItem(dlg, item, &type, &hitem, &box);
+	SetDialogItemText(hitem, str);
 }
 
 /* set the text of the dialog item to the number */
@@ -321,7 +306,7 @@ static void SetDNum(DialogPtr dlg, short item, long num)
 {
 	Str255 str;
 
-	NumToString(num, str); // Convert number to Pascal string
+	NumToString(num, str);
 	SetDText(dlg, item, str);
 }
 

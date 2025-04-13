@@ -79,19 +79,22 @@
 	#include <console.h>
 #endif
 
-#include <MacTypes.h>
+#include <MacTypes.h>      // Good practice, though likely pulled in by others
 #include <Quickdraw.h>
+#include <Fonts.h>         // For InitFonts
+#include <Windows.h>       // For InitWindows
+#include <Menus.h>         // For InitMenus
+#include <TextEdit.h>      // For TEInit
+#include <Dialogs.h>       // For InitDialogs
 #include <Events.h>
-#include <Fonts.h>
-#include <Windows.h>
-#include <Menus.h>
-#include <TextEdit.h>
-#include <Dialogs.h>
-#include <Gestalt.h>  // Instead of GestaltEqu.h
+#include <OSUtils.h>       // For ExitToShell, TickCount etc.
+#include <Memory.h>        // For Memory Manager calls if any (HeapInit uses them)
+#include <ToolUtils.h>     // For InitCursor etc.
 
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+#include <Gestalt.h>
 #include <Threads.h>
 #include "ThreadLib.h"
 
